@@ -30,7 +30,6 @@ static inline void add_token(
 	) {
 	if (list->size >= list->capacity) {
 		list->capacity *= 2;
-		// understand this realloc computation
 		Token *new_token = realloc(list->tokens, list->capacity * sizeof(Token));
 		if (!new_token) return;
 		list->tokens = new_token;
@@ -42,6 +41,13 @@ static inline void add_token(
 	list->tokens[n].type = type;
 	list->size++;
 }
+
+// helper for URL extraction
+static bool is_url_char(char c) {
+    return isalnum(c) || c == ':' || c == '/' || c == '.' || c == '-' ||
+           c == '_' || c == '?' || c == '=' || c == '&';
+}
+
 
 void tokenize(const char *string, TokenList **out) {
 	if (!string) return;
@@ -56,6 +62,12 @@ void tokenize(const char *string, TokenList **out) {
 	
 	while (p < end) {
 		const char *token_start = p;
+
+		// skip non-ASCII (UTF-8, emojis, ...)
+		if ((unsigned char)*p > 127) {
+			p++; 
+			continue;
+		}
 
 		// whitespace 
 		if (isspace(*p)) {
@@ -84,16 +96,51 @@ void tokenize(const char *string, TokenList **out) {
 			continue;
 		}
 
-		// URL (to be implemented) 
-		
-		// Number
+		// URL (skipped for now) 
+		if ((strncmp(p, "http://", 7) == 0) ||
+        		(strncmp(p, "https://", 8) == 0) ||
+        		(strncmp(p, "www.", 4) == 0)) {
+        			while (p < end && is_url_char(*p))
+					p++; 
+        			continue; 
+		}
+				
+		// Number or Time 
 		if (isdigit(*p)) {
-			while (p < end && (isdigit(*p) || *p == '.' || *p == ','))
+			const char *start = p;
+			int digit_count = 0;
+			while (p < end && isdigit(*p) && digit_count < 2) {
 				p++;
-			add_token(list, token_start, p, TOKEN_NUMBER);
+				digit_count++;
+			}
+			// time check 
+			if (p < end && *p == ':' && p + 2 < end && isdigit(*(p + 1))) {
+				p++; 
+				if (isdigit(*p)) 
+					p++;
+				if (p < end && isdigit(*p))
+					p++;
+
+				// am/pm check -- handles both 00:00am and 00:00 am 
+				while (p < end && isspace((unsigned char)*p)) 
+					p++;
+				
+				if (p + 1 < end && (tolower(*p) == 'a' || tolower(*p) == 'p') 
+						&& tolower(*(p+1)) == 'm') {
+					p += 2;
+				}
+				
+				add_token(list, start, p, TOKEN_TIME);
+				continue;
+			}
+			// number check 
+			p = start;
+			while (p < end && (isdigit(*p) || *p == '.' || *p == ',')) 
+				p++;
+			add_token(list, start, p, TOKEN_NUMBER);
 			continue;
 		}
-
+		
 		// Alphabetic
 		if (isalpha(*p)) {
 			while (p < end && (isalnum(*p) || *p == '\'' || *p == '-'))
@@ -108,6 +155,9 @@ void tokenize(const char *string, TokenList **out) {
 			add_token(list, token_start, p, TOKEN_PUNCT);
 			continue;
 		}
+
+		
+		// Date (to be implemented, expect low frequency)
 
 		// Unknown
 		p++;
@@ -135,8 +185,7 @@ void free_tokens(TokenList *list) {
 
 
 int main(void) {
-	const char *t = "DHS statement to @FoxNews “At \
-	2:19 PST, US Border Patrol agents were conducting a targeted vehicle stop in Portland, Oregon. The passenger of the vehicle and target is a Venezuelan illegal alien affiliated with the transnational Tren de Aragua prostitution ring and involved in a recent shooting in Portland. The vehicle driver is believed to be a member of the vicious Venezuelan gang Tren de Aragua. When agents identified themselves to the vehicle occupants, the driver weaponized his vehicle and attempted to run over the law enforcement agents. Fearing for his life and safety, an agent fired a defensive shot. The driver drove off with the passenger, fleeing the scene. This situation is evolving and more information is forthcoming.”";
+	const char *t = "$500 billion across 350 million people is";
 	TokenList *list = NULL;
 	tokenize(t, &list);
 	print_tokens(list);

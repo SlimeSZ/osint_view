@@ -2,6 +2,7 @@
 #define TOKENIZER_H
 
 #include <stddef.h>
+#include <stdbool.h>
 
 typedef enum {
 	TOKEN_WORD,
@@ -21,9 +22,9 @@ typedef struct {
     const char *start;   // pointer to token start
     const char *end;     // pointer to token end
     size_t len;          // length in chars
-    TokenType type;      // token type
+    TokenType type;      // token type 
+    bool sentence_end;
 } Token;
-
 
 typedef struct {
 	Token *tokens;
