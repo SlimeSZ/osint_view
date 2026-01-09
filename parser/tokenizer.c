@@ -48,6 +48,38 @@ static bool is_url_char(char c) {
            c == '_' || c == '?' || c == '=' || c == '&';
 }
 
+void sentence_bounds(TokenList *list, const char *text_end) {
+	if (list->size == 0) return;
+	size_t curr = list->size - 1;
+	Token *t = &list->tokens[curr];
+
+	char c = t->start[0];
+	if (c != '.' && c != '!' && c != '?' && c != '|') {
+        	return; 
+	}
+
+	// decimal falsification (prev & next = num/digit)
+	if (c == '.' && curr > 0) {
+		Token *prev = &list->tokens[curr - 1];
+		if (prev->type == TOKEN_NUMBER && t->end < text_end && isdigit(*t->end))
+			return;
+	}
+
+	// ellipsis check (c + 1 == '.')
+	if (c == '.' && t->end < text_end && *t->end == '.')
+		return;
+
+	// abbreviation (U.S.A) -- needs optimization
+	if (c == '.' && curr > 0) {
+		Token *prev = &list->tokens[curr - 1];
+		if (prev->type == TOKEN_WORD) {
+			if (prev->len == 1)
+				return;
+		}
+	}
+
+	t->sentence_end = true;
+}
 
 void tokenize(const char *string, TokenList **out) {
 	if (!string) return;
@@ -153,6 +185,8 @@ void tokenize(const char *string, TokenList **out) {
 		if (ispunct(*p)) {
 			p++;
 			add_token(list, token_start, p, TOKEN_PUNCT);
+			// check for sentence boundaries on each punctuation
+			sentence_bounds(list, end);
 			continue;
 		}
 
@@ -171,10 +205,14 @@ void print_tokens(TokenList *list) {
     if (!list) return;
     for (size_t i = 0; i < list->size; i++) {
         Token *t = &list->tokens[i];
-        printf("[%.*s] ", (int)(t->end - t->start), t->start);
+        printf("[%.*s]", (int)(t->end - t->start), t->start);
+        if (t->sentence_end) 
+            printf("<S>");   // mark sentence boundary
+        printf(" ");
     }
     putchar('\n');
 }
+
 
 
 void free_tokens(TokenList *list) {
@@ -185,7 +223,7 @@ void free_tokens(TokenList *list) {
 
 
 int main(void) {
-	const char *t = "$500 billion across 350 million people is";
+	const char *t = "I live in the U.S.A. It is nice.";
 	TokenList *list = NULL;
 	tokenize(t, &list);
 	print_tokens(list);
