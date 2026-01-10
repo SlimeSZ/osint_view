@@ -7,6 +7,7 @@
 #define INITIAL_CAPACITY 48000
 #define MAX_LINE 1024
 #define MAX_LINE_NO 50000
+#define MAX_COUNTRIES 300
 
 static Gazetteer *gazetteer_init(void) {
 	Gazetteer *gaz = malloc(sizeof(Gazetteer));
@@ -16,12 +17,21 @@ static Gazetteer *gazetteer_init(void) {
 	}
 	gaz->entries = calloc(INITIAL_CAPACITY, sizeof(GeoEntry));
 	if (!gaz->entries) {
-		fprintf(stderr, "Err: malloc");
+		fprintf(stderr, "Err: calloc");
 		free(gaz);
 		return NULL;
 	}
+	gaz->countries = calloc(MAX_COUNTRIES, sizeof(CountryIndex));
+	if (!gaz->countries) {
+		fprintf(stderr, "Err: calloc");
+		free(gaz);
+		free(gaz->entries);
+		return NULL;
+	}
+
 	gaz->count = 0;
 	gaz->capacity = INITIAL_CAPACITY; 
+	gaz->country_count = 0;
 	return gaz;
 }
 
@@ -30,11 +40,16 @@ void free_gazetteer(Gazetteer *gaz) {
 		return;
 	for (size_t i = 0; i < gaz->count; i++) {
 		GeoEntry *e = &gaz->entries[i];
-		free(e->name);
+		free(e->city_name);
 		free(e->iso2);
 		free(e->iso3);
-		free(e->country);
 	}
+	for (size_t i = 0; i < gaz->country_count; i++) {
+		CountryIndex *c = &gaz->countries[i];
+		free(c->iso2);
+		free(c->name);
+	}
+	free(gaz->countries);
 	free(gaz->entries);
 	free(gaz);
 }
@@ -84,43 +99,26 @@ static const char *parse_field(const char *entry, char *buf, size_t bufsize) {
 	return p;
 }
 
-static void add_entry(
-	Gazetteer *gaz,
-	const char *city_name,
-	float lat, 
-	float lon,
-	const char *iso2,
-	const char *iso3,
-	const char *country,
-	size_t lines_left
-) {
-	// handle any required reallocs 
-	if (gaz->count >= gaz->capacity) {
-		size_t old_cap = gaz->capacity;
-		size_t new_cap = gaz->capacity + lines_left;
-		GeoEntry *tmp = realloc(gaz->entries, new_cap * sizeof(GeoEntry));
-		if (!tmp) {
-			fprintf(stderr, "Err: realloc failed\n");
-			return;
-		}
-		gaz->entries = tmp;
-		gaz->capacity = new_cap;
-		memset(&gaz->entries[old_cap], 0, 
-			(new_cap - old_cap) * sizeof(GeoEntry)
-		);
+static CountryIndex *country_idx_get_init(Gazetteer *gaz, const char *iso2, const char *name) {
+	// find existing
+	for (size_t i = 0; i < gaz->country_count; i++) {
+		if (strcmp(gaz->countries[i].iso2, iso2) == 0)
+			return &gaz->countries[i];
 	}
-	
-	GeoEntry *entry = &gaz->entries[gaz->count];
-	entry->name = strdup(city_name);
-	entry->iso2 = strdup(iso2);
-	entry->iso3 = strdup(iso3);
-	entry->country = strdup(country);
-	entry->lat = lat;
-	entry->lon = lon;
-
-	gaz->count++;
+	if (gaz->country_count >= MAX_COUNTRIES) {
+		fprintf(stderr, "Err: exceeeded MAX COUNTRIES\n");
+		return NULL;
+	}
+	// create new country idx
+	CountryIndex *country = &gaz->countries[gaz->country_count];
+	country->iso2 = strdup(iso2);
+	country->name = strdup(name);
+	country->start_idx = gaz->count;
+	country->city_count = 0;
+	gaz->country_count++;
+	return country;
 }
-
+	
 Gazetteer *load_gazetteer(const char *filepath) {
 	FILE *fp = fopen(filepath, "r");
 	if (!fp) {
@@ -177,8 +175,34 @@ Gazetteer *load_gazetteer(const char *filepath) {
 			fprintf(stderr, "Warning: invalid lon on line %zu, skipping\n", line_no);
 			continue;
 		}
-		
-		add_entry(gaz, city, lat, lon, iso2, iso3, country, lines_left);
+
+		// realloc space if need be
+		if (gaz->count >= gaz->capacity) {
+			size_t old_cap = gaz->capacity;
+			size_t new_cap = gaz->capacity + lines_left;
+			GeoEntry *tmp = realloc(gaz->entries, new_cap * sizeof(GeoEntry));
+			if (!tmp) {
+				fprintf(stderr, "Err: realloc failed\n");
+				return NULL;
+			}
+			gaz->entries = tmp;
+			gaz->capacity = new_cap;
+			memset(&gaz->entries[old_cap], 0, 
+				(new_cap - old_cap) * sizeof(GeoEntry)
+			);
+		}
+
+		CountryIndex *c_idx = country_idx_get_init(gaz, iso2, country);
+		if (!c_idx) continue;
+		GeoEntry *entry = &gaz->entries[gaz->count];
+		entry->city_name = strdup(entry->city_name);
+		entry->iso2 = strdup(iso2);
+		entry->iso3 = strdup(iso3);
+		entry->lat = lat;
+		entry->lon = lon;
+		entry->country = c_idx;
+		c_idx->city_count++;
+		gaz->count++; 	
 	}
 	
 	fclose(fp);
@@ -193,16 +217,9 @@ int main(void) {
 		return 1;
 	}
 	printf("\nFirst 10 GeoEntries:\n");
-	for (size_t i = 0; i < 10000 && i < gaz->count; i++) {
+	for (size_t i = 0; i < gaz->capacity && i < gaz->count; i++) {
 		GeoEntry *ge = &gaz->entries[i];
-		printf(
-			"City: %s (%s | %s | %s) Lon: %.4f Lat: %.4f\n",
-			ge->name,
-			ge->country,
-			ge->iso2, ge->iso3,
-			ge->lat,
-			ge->lon
-		);
+
 	}
 	free_gazetteer(gaz);
 	return 0;
