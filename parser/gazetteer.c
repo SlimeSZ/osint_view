@@ -3,55 +3,88 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <uthash.h>
 
-#define INITIAL_CAPACITY 48000
+/* Geo Configs */
+#define MAX_GEOENTRIES 49000
+#define MAX_COUNTRIES 200
+
+/* Parsing Configs */
 #define MAX_LINE 1024
 #define MAX_LINE_NO 50000
-#define MAX_COUNTRIES 300
 
-static Gazetteer *gazetteer_init(void) {
+static Gazetteer *gaz_init(void) {
 	Gazetteer *gaz = malloc(sizeof(Gazetteer));
-	if (__builtin_expect(!gaz, 0)) {
+	if (!gaz) {
 		fprintf(stderr, "Err: malloc");
 		return NULL;
 	}
-	gaz->entries = calloc(INITIAL_CAPACITY, sizeof(GeoEntry));
+	gaz->entries = calloc(MAX_GEOENTRIES, sizeof(GeoEntry));
 	if (!gaz->entries) {
 		fprintf(stderr, "Err: calloc");
 		free(gaz);
 		return NULL;
 	}
+	gaz->geo_capacity = MAX_GEOENTRIES; 
 	gaz->countries = calloc(MAX_COUNTRIES, sizeof(CountryIndex));
 	if (!gaz->countries) {
 		fprintf(stderr, "Err: calloc");
-		free(gaz);
 		free(gaz->entries);
+		free(gaz);
 		return NULL;
 	}
-
-	gaz->count = 0;
-	gaz->capacity = INITIAL_CAPACITY; 
-	gaz->country_count = 0;
+	gaz->country_capacity = MAX_COUNTRIES;
 	return gaz;
 }
 
-void free_gazetteer(Gazetteer *gaz) {
-	if (__builtin_expect(!gaz, 0))
-		return;
-	for (size_t i = 0; i < gaz->count; i++) {
-		GeoEntry *e = &gaz->entries[i];
-		free(e->city_name);
-		free(e->iso2);
-		free(e->iso3);
+void gaz_free(Gazetteer *gaz) {
+	if (!gaz) return;
+	for (size_t i = 0; i < gaz->geo_count; i++) {
+		GeoEntry *ge = &gaz->entries[i];
+		free(ge->city_name);
+		free(ge->iso2);
+		free(ge->iso3);
 	}
 	for (size_t i = 0; i < gaz->country_count; i++) {
-		CountryIndex *c = &gaz->countries[i];
-		free(c->iso2);
-		free(c->name);
+		CountryIndex *ci = &gaz->countries[i];
+		free(ci->iso2);
+		free(ci->name);
 	}
-	free(gaz->countries);
 	free(gaz->entries);
+	free(gaz->countries);
 	free(gaz);
+}
+
+/* Called whilst parsing CSV to help build country indices */
+static CountryIndex *country_get_init(Gazetteer *gaz, const char *iso2, const char *country_name) {
+	if (!gaz) return NULL;
+	// look up via hashmap (iso2 -> CountryIndex) in case country already exists & return it 
+	IsoToCountryMap *map = NULL;
+	HASH_FIND_STR(gaz->country_hashmap, iso2, map);
+	if (map) {
+		return &gaz->countries[map->country_idx];
+	}
+	if (gaz->country_count >= gaz->country_capacity) {
+		fprintf(stderr, "country count exceeded MAX_COUNTRIES");
+		return NULL;
+	}
+	// return newly created
+	CountryIndex *ci = &gaz->countries[gaz->country_count];
+	ci->iso2 = strdup(iso2);
+	ci->name = strdup(country_name);
+	ci->city_count = 0;
+	/* Works ONLY if CSV is grouped by country which it is for data we use here but something to keep in mind */
+	// ci->start_idx = gaz->geo_count;
+
+	IsoToCountryMap *new_map = malloc(sizeof(IsoToCountryMap));
+	if (!new_map) { perror("malloc"); return NULL; }
+	strncpy(new_map->iso2, iso2, sizeof(new_map->iso2) - 1);
+	new_map->iso2[2] = '\0';
+	new_map->country_idx = gaz->country_count;
+	HASH_ADD_STR(gaz->country_hashmap, iso2, new_map);
+
+	gaz->country_count++;
+	return ci;
 }
 
 /*
@@ -99,33 +132,20 @@ static const char *parse_field(const char *entry, char *buf, size_t bufsize) {
 	return p;
 }
 
-static CountryIndex *country_idx_get_init(Gazetteer *gaz, const char *iso2, const char *name) {
-	// find existing
-	for (size_t i = 0; i < gaz->country_count; i++) {
-		if (strcmp(gaz->countries[i].iso2, iso2) == 0)
-			return &gaz->countries[i];
-	}
-	if (gaz->country_count >= MAX_COUNTRIES) {
-		fprintf(stderr, "Err: exceeeded MAX COUNTRIES\n");
-		return NULL;
-	}
-	// create new country idx
-	CountryIndex *country = &gaz->countries[gaz->country_count];
-	country->iso2 = strdup(iso2);
-	country->name = strdup(name);
-	country->start_idx = gaz->count;
-	country->city_count = 0;
-	gaz->country_count++;
-	return country;
+static int compare_by_iso2(const void *a, const void *b) {
+	const GeoEntry *ga = (const GeoEntry*)a;
+	const GeoEntry *gb = (const GeoEntry*)b;
+	return strcmp(ga->iso2, gb->iso2);
 }
-	
-Gazetteer *load_gazetteer(const char *filepath) {
+
+Gazetteer *load_gaz(const char *filepath) {
 	FILE *fp = fopen(filepath, "r");
 	if (!fp) {
-		fprintf(stderr, "Err: cannot fopen: %s\n", filepath);
+		fprintf(stderr, "Err: cannot open via fopen: %s\n", filepath);
 		return NULL;
 	}
-	Gazetteer *gaz = gazetteer_init();
+
+	Gazetteer *gaz = gaz_init();
 	if (!gaz) {
 		fclose(fp);
 		return NULL;
@@ -133,15 +153,22 @@ Gazetteer *load_gazetteer(const char *filepath) {
 
 	char line[MAX_LINE];
 	size_t line_no = 0;
-	size_t lines_left = MAX_LINE_NO;
+
+	// debugging 
+	size_t empty_lines = 0;	
+
+	// skip first line
+	if (fgets(line, sizeof(line), fp)) {
+		line_no++;
+	}
 
 	while (fgets(line, sizeof(line), fp)) {
 		line_no++;
-		lines_left--;
 		line[strcspn(line, "\r\n")] = '\0';
-		if (strlen(line) == 0)
+		if (strlen(line) == 0) {
+			empty_lines++;
 			continue;
-		
+		}
 		const char *p = line;
 		char city[256];
 		char city_ascii[256];
@@ -150,8 +177,8 @@ Gazetteer *load_gazetteer(const char *filepath) {
 		char country[256];
 		char iso2[8];
 		char iso3[8];
-
-		// parse each field 
+		
+		/* parse each field */ 
 		// cols: 
 		// "city","city_ascii","lat","lng","country","iso2","iso3","admin_name","capital","population","id"
 		p = parse_field(p, city, sizeof(city));
@@ -162,65 +189,88 @@ Gazetteer *load_gazetteer(const char *filepath) {
 		p = parse_field(p, iso2, sizeof(iso2));
 		p = parse_field(p, iso3, sizeof(iso3));
 		
-		// validate lat/lon's (optional)
-		// handles "50.45 N" or "50.45 "
+		/* validate lat/lon's (optional) -- handles "50.45 N" or "50.45 */
 		char *end_p;
 		float lat = strtof(lat_str, &end_p);
 		if (*end_p != '\0' && !isspace(*end_p)) {
-			fprintf(stderr, "Invalid lat on line %zu\n", line_no);
+			fprintf(stderr, "Invalid lat on line %zu, skipping\n", line_no);
 			continue;
 		}
-		float lon = strtof(lon_str, &end_p);
-		if (*end_p != '\0' && !isspace(*end_p)) {
-			fprintf(stderr, "Warning: invalid lon on line %zu, skipping\n", line_no);
+		float lon = strtof(lon_str, &end_p); 
+			if (*end_p != '\0' && !isspace(*end_p)) {
+				fprintf(stderr, "Invalid lon on line %zu, skipping\n", line_no);
+				continue;
+		}
+
+		CountryIndex *ci = country_get_init(gaz, iso2, country);
+		if (!ci) 
 			continue;
-		}
-
-		// realloc space if need be
-		if (gaz->count >= gaz->capacity) {
-			size_t old_cap = gaz->capacity;
-			size_t new_cap = gaz->capacity + lines_left;
-			GeoEntry *tmp = realloc(gaz->entries, new_cap * sizeof(GeoEntry));
-			if (!tmp) {
-				fprintf(stderr, "Err: realloc failed\n");
-				return NULL;
-			}
-			gaz->entries = tmp;
-			gaz->capacity = new_cap;
-			memset(&gaz->entries[old_cap], 0, 
-				(new_cap - old_cap) * sizeof(GeoEntry)
-			);
-		}
-
-		CountryIndex *c_idx = country_idx_get_init(gaz, iso2, country);
-		if (!c_idx) continue;
-		GeoEntry *entry = &gaz->entries[gaz->count];
-		entry->city_name = strdup(entry->city_name);
-		entry->iso2 = strdup(iso2);
-		entry->iso3 = strdup(iso3);
-		entry->lat = lat;
-		entry->lon = lon;
-		entry->country = c_idx;
-		c_idx->city_count++;
-		gaz->count++; 	
+		
+		GeoEntry *ge = &gaz->entries[gaz->geo_count];
+		ge->city_name = strdup(city);
+		ge->iso2 = strdup(iso2);
+		ge->iso3 = strdup(iso3);
+		ge->lat = lat;
+		ge->lon = lon;
+		gaz->geo_count++;
 	}
-	
+
 	fclose(fp);
-	printf("Loaded %zu cities' data\n", gaz->count);
+	printf("Loaded %zu cities data -- %zu countries\n", gaz->geo_count, gaz->country_count);
+	printf("No. empty lines: %zu\n", empty_lines);
+
+	/* Rebuild country indices to group by country  */
+	qsort(gaz->entries, gaz->geo_count, sizeof(GeoEntry), compare_by_iso2);
+	for (size_t i = 0; i < gaz->country_count; i++) {
+		gaz->countries[i].city_count = 0;
+		gaz->countries[i].start_idx = 0;
+	}
+	for (size_t i = 0; i <gaz->geo_count; i++) {
+		IsoToCountryMap *map = NULL;
+		HASH_FIND_STR(gaz->country_hashmap, gaz->entries[i].iso2, map);
+		if (!map)
+			continue;
+		CountryIndex *ci = &gaz->countries[map->country_idx];
+		if (ci->city_count == 0) {
+			ci->start_idx = i;
+		}
+		ci->city_count++;
+	}
+
 	return gaz;
 }
 
 int main(void) {
-	Gazetteer *gaz = load_gazetteer("data/worldcities.csv");
+	Gazetteer *gaz = load_gaz("data/worldcities.csv");
 	if (!gaz) {
-		fprintf(stderr, "Err (main): failed to load gaz");
+		fprintf(stderr, "Err (main): failed to load gaz\n");
 		return 1;
 	}
-	printf("\nFirst 10 GeoEntries:\n");
-	for (size_t i = 0; i < gaz->capacity && i < gaz->count; i++) {
-		GeoEntry *ge = &gaz->entries[i];
 
+	printf("\nCountries & Cities data:\n");
+
+	size_t printed_countries = 0;
+	for (size_t c = 0; c < gaz->country_count && printed_countries < 100000; c++) {
+		CountryIndex *country = &gaz->countries[c];
+		printf("Country: %s (%s) | cities: %zu | start_idx: %zu\n",
+				country->name, country->iso2, country->city_count, country->start_idx);
+		for (size_t i = 0; i < country->city_count; i++) {
+			size_t geo_idx = country->start_idx + i;
+			if (geo_idx >= gaz->geo_count) break;
+
+			GeoEntry *ge = &gaz->entries[geo_idx];
+			printf("  %s | %s | %s | %.3f | %.3f\n",
+			       ge->city_name, ge->iso2, ge->iso3, ge->lat, ge->lon);
+		}
+
+		printed_countries++;
 	}
-	free_gazetteer(gaz);
+
+	gaz_free(gaz);
 	return 0;
 }
+
+
+
+
+

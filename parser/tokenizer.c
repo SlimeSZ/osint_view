@@ -39,6 +39,7 @@ static inline void add_token(
 	list->tokens[n].end = end;
 	list->tokens[n].len = end - start;
 	list->tokens[n].type = type;
+	list->tokens[n].sentence_end = false;
 	list->size++;
 }
 
@@ -140,6 +141,15 @@ void tokenize(const char *string, TokenList **out) {
 		// Number or Time 
 		if (isdigit(*p)) {
 			const char *start = p;
+			// alphanumeric check (e.g. CAs)
+			if (p + 1 < end && isalpha(*(p+1))) {
+				p++;
+				while (p < end && isalnum(*p)) 
+					p++;
+				add_token(list, start, p, TOKEN_WORD);
+				continue;
+			}
+
 			int digit_count = 0;
 			while (p < end && isdigit(*p) && digit_count < 2) {
 				p++;
@@ -223,7 +233,7 @@ void free_tokens(TokenList *list) {
 
 
 int main(void) {
-	const char *t = "I live in the U.S.A. It is nice.";
+	const char *t = "$ALONE (CA 8AdsF2QXFA8QkFuQ9TrQW6nEyM4E6yT4AwqgZ5cTpump) is a bundled scam, sorry bros, don't buy, stay away.";
 	TokenList *list = NULL;
 	tokenize(t, &list);
 	print_tokens(list);
