@@ -1,4 +1,5 @@
 #include "tokenizer.h" 
+#include <stdint.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
@@ -211,6 +212,76 @@ void tokenize(const char *string, TokenList **out) {
 	*out = list;
 }
 
+#define MAX_SENTENCE_LEN 24
+
+void tokenize_sentence(const TokenList *in, TokenList **out) {
+	if (!in || in->size == 0) {
+		*out = NULL;
+		return;
+	} 
+
+	TokenList *sentences = malloc(sizeof(TokenList));
+	if (!sentences) { *out = NULL; return; }
+
+	sentences->tokens = malloc(sizeof(Token) * MAX_SENTENCE_LEN);
+	if (!sentences->tokens) { free(sentences); *out = NULL; return; }
+
+	sentences->size = 0; 
+	sentences->capacity = MAX_SENTENCE_LEN;
+
+	size_t start_idx = 0;
+
+	for (size_t i = 0; i < in->size; i++) {
+		Token *token = &in->tokens[i];
+		// if sentence end, get last known 'start_idx' of TokenList until curr token end to obtain one sentence 
+		// update start idx to curr idx, next sentence_end will count backwards to this new start idx to obtain the 
+		// next sentence
+		if (token->sentence_end) {
+			// grab first token 
+			const char *start = in->tokens[start_idx].start;
+			// grab last token 
+			const char *end = token->end;
+
+			// ensure no realloc needed 
+			if (sentences->size >= sentences->capacity) {
+				size_t new_cap = sentences->capacity * 2;
+				Token *tmp = realloc(sentences->tokens, sizeof(Token) * new_cap);
+				if (!tmp) { perror("realloc"); break; }
+				sentences->tokens = tmp;
+				sentences->capacity = new_cap;
+			}
+
+			Token *sentence_tok = &sentences->tokens[sentences->size++];
+			sentence_tok->start = start;
+			sentence_tok->end = end;
+			sentence_tok->len = end - start;
+			sentence_tok->type = TOKEN_UNKNOWN;
+			sentence_tok->sentence_end = true;
+			start_idx = i + 1;
+		}
+	}
+
+	// handle trailing tokens 
+	if (start_idx < in->size) {
+		const char *start = in->tokens[start_idx].start;
+		const char *end = in->tokens[in->size - 1].end;
+
+		if (sentences->size >= sentences->capacity) {
+			size_t new_cap = sentences->capacity * 2;
+			Token *tmp = realloc(sentences->tokens, sizeof(Token) * new_cap);
+			if (tmp) { sentences->tokens = tmp; sentences->capacity = new_cap; }
+		}
+
+		Token *reg_tok = &sentences->tokens[sentences->size++];
+		reg_tok->start = start;
+		reg_tok->end = end;
+		reg_tok->len = start - end;
+		reg_tok->type = TOKEN_UNKNOWN;
+		reg_tok->sentence_end = true;
+	}
+	*out = sentences; 
+}
+
 void print_tokens(TokenList *list) {
     if (!list) return;
     for (size_t i = 0; i < list->size; i++) {
@@ -223,7 +294,14 @@ void print_tokens(TokenList *list) {
     putchar('\n');
 }
 
-
+void print_sentence_tokens(TokenList *list) {
+	if (!list) return;
+	for (size_t i = 0; i < list->size; i++) {
+		Token *t = &list->tokens[i];
+		printf("[%.*s]<S> ", (int)(t->end - t->start), t->start);
+	} 
+	putchar('\n');
+}
 
 void free_tokens(TokenList *list) {
 	if (!list) return;
@@ -231,16 +309,17 @@ void free_tokens(TokenList *list) {
 	free(list);
 }
 
-
+/* Test */
 int main(void) {
-	const char *t = "$ALONE (CA 8AdsF2QXFA8QkFuQ9TrQW6nEyM4E6yT4AwqgZ5cTpump) is a bundled scam, sorry bros, don't buy, stay away.";
+	const char *t = "Hi, my name is John. It is 8:30 AM in the morning & I have a bus to catch. See ya there!.";
 	TokenList *list = NULL;
 	tokenize(t, &list);
-	print_tokens(list);
+
+	TokenList *sentence_tokenization = NULL;
+	tokenize_sentence(list, &sentence_tokenization);
+	print_sentence_tokens(sentence_tokenization);
+
 	putchar('\n');
 	free_tokens(list);
-
-	return 0;
+	free_tokens(sentence_tokenization);
 }
-
-
