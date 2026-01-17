@@ -297,8 +297,8 @@ void print_tokens(TokenList *list) {
 void print_sentence_tokens(TokenList *list) {
 	if (!list) return;
 	for (size_t i = 0; i < list->size; i++) {
-		Token *t = &list->tokens[i];
-		printf("[%.*s]<S> ", (int)(t->end - t->start), t->start);
+		Token *sentence = &list->tokens[i];
+		printf("[%.*s]<S> ", (int)(sentence->end - sentence->start), sentence->start);
 	} 
 	putchar('\n');
 }
@@ -309,9 +309,9 @@ void free_tokens(TokenList *list) {
 	free(list);
 }
 
-/* Test */
+/* Test 
 int main(void) {
-	const char *t = "Hi, my name is John. It is 8:30 AM in the morning & I have a bus to catch. See ya there!.";
+	const char *t = "Hi, my name is John. I am from America.";
 	TokenList *list = NULL;
 	tokenize(t, &list);
 
@@ -322,4 +322,4 @@ int main(void) {
 	putchar('\n');
 	free_tokens(list);
 	free_tokens(sentence_tokenization);
-}
+}*/

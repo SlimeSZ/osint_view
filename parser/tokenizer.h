@@ -34,7 +34,9 @@ typedef struct {
 
 // main API 
 void tokenize(const char *string, TokenList **out);
+void tokenize_sentence(const TokenList *in, TokenList **out);
 void print_tokens(TokenList *list);
+void print_sentence_tokens(TokenList *list);
 void free_tokens(TokenList *list);
 
 #endif
