@@ -184,14 +184,31 @@ void tokenize(const char *string, TokenList **out) {
 			continue;
 		}
 		
-		// Alphabetic
+		// Alphabetic (with abbreviation checks)
 		if (isalpha(*p)) {
+			const char *start = token_start;
+			if (p + 1 < end && *(p + 1) == '.' && p + 2 < end && isalpha(*(p + 2))) {
+				while (p < end) {
+					if (isalpha(*p)) {
+						p++;
+						if (p < end && *p == '.') {
+							p++;
+						} else {
+							break;
+						}
+					} else {
+						break;
+					}
+				}
+				add_token(list, start, p, TOKEN_WORD);
+				continue;
+			}
 			while (p < end && (isalnum(*p) || *p == '\'' || *p == '-'))
 				p++;
 			add_token(list, token_start, p, TOKEN_WORD);
-			continue;
+			continue; 
 		}
-
+		
 		// Punctuation
 		if (ispunct(*p)) {
 			p++;
@@ -308,18 +325,3 @@ void free_tokens(TokenList *list) {
 	free(list->tokens);
 	free(list);
 }
-
-/* Test 
-int main(void) {
-	const char *t = "Hi, my name is John. I am from America.";
-	TokenList *list = NULL;
-	tokenize(t, &list);
-
-	TokenList *sentence_tokenization = NULL;
-	tokenize_sentence(list, &sentence_tokenization);
-	print_sentence_tokens(sentence_tokenization);
-
-	putchar('\n');
-	free_tokens(list);
-	free_tokens(sentence_tokenization);
-}*/

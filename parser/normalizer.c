@@ -1,3 +1,4 @@
+#include "normalizer.h"
 #include <ctype.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -50,85 +51,99 @@ static inline char *str_to_lower(const char *str) {
 	return out;
 }
 
-void strip_edges(const char **start_in, const char **end_in) {
-	if (!start_in || !end_in || *start_in > *end_in)
+void normalize_(const TokenList *tokens, char **out_tokens) {
+	if (!tokens || tokens->size == 0 || !out_tokens)
 		return;
-	const char *s = *start_in;
-	const char *e = *end_in;
 
-	while (s < e) {
-		unsigned char c = (unsigned char)*s;
-		if (!ispunct(c) || c == '\'') 
-			break;
-		s++;
+	size_t outc = 0;
+	for (size_t i = 0; i < tokens->size; i++) {
+		Token *t = &tokens->tokens[i];
+		
+		// printf("(%zu)[%.*s] -- \n", i, (int)(t->end - t->start), t->start);
+		if (t->type == TOKEN_WHITESPACE || t->type == TOKEN_PUNCT) {
+			// printf("token '%.*s' is type: %d\n", (int)(t->end-t->start), t->start, t->type);
+			continue;
+		}
+		
+		/* one token is in range [s, e] */
+		const char *s = t->start;
+		const char *e = t->end;
+
+		while (s < e && ispunct((unsigned char)*s))
+			s++;
+		// printf("end: %c\n", (unsigned char)*(e - 1));
+		size_t n = e-s; 
+
+		// temp buffer for normalized output
+		char nbuf[256];
+		size_t bidx = 0;
+
+		bool is_abbrev = (n >= 3);
+		
+		/* All normalziations involving iterating over a token's chars are performed here */
+		// printf("--- Token Word [%zu] ---\n", i);
+		for (size_t j = 0; j < n; j++) {
+			char c = s[j];
+			// printf("char: [%zu] = %c\n", i, c);
+			
+			/* Abbreviation normalziation */
+			if (is_abbrev) {
+				if (j % 2 == 0) { // if even it's a letter
+					if (!isalpha((unsigned char)c)) {
+						is_abbrev = false;
+					}
+				} else { // if odd its a period
+					if (c != '.') {
+						is_abbrev = false;
+					}
+				}
+			}	
+			// copy to buffer, skipping dots if abrev. and add lowercase normalization
+			if (c != '.' || !is_abbrev) {
+				// printf("copying char: '%c' to buf[%zu]\n", c, bidx);
+				nbuf[bidx++] = tolower((unsigned char)c);
+			} 
+			// debug
+			// else {
+				// printf("skipping char: '%c' (dot in abbreviation)\n", c);
+			// }
+
+
+		}
+		if (bidx >= 2 && nbuf[bidx-2] == '\'' && (nbuf[bidx-1] == 's' || nbuf[bidx-1] == 'S')) {
+			bidx -= 2;  // posessive strip 
+		} else if (bidx >= 1 && nbuf[bidx-1] == '\'') { 
+			bidx -= 1;  // trailing apostrophe strip
+		}
+
+		nbuf[bidx] = '\0';
+		out_tokens[outc++] = strdup(nbuf);
+		// printf("Token success: %s\n", nbuf);
 	}
-
-	while (e > s) {
-		unsigned char c = (unsigned char)*(e - 1);
-		if (!ispunct(c))
-			break;
-		e--;
-	}
-
-	*start_in = s;
-	*end_in = e;
+	out_tokens[outc] = NULL;
 }
 
-static inline void strip_possessive(const char **start_in, const char **end_in) {
-	if (!start_in || !end_in) return;
-
-	const char *s = *start_in;
-	const char *e = *end_in;
-	size_t len = e - s;
-
-	if (len >= 2 && e[-2] == '\'' && (e[-1] == 's' || e[-1] == 'S')) {
-		// strip 's or 'S 
-	        e -= 2;
-	} else if (len >= 1 && e[-1] == '\'') {
-		// strip trailing apostrophe only 
-	        e -= 1;
+void free_normalized(char **normalized) {
+	if (!normalized) return;
+	for (size_t i = 0; normalized[i] != NULL; i++) {
+		free(normalized[i]);
 	}
-	*start_in = s;
-	*end_in   = e;
 }
 
-static inline void normalize_abbreviation(const char *start, const char *end,
-                                          char *out_buf, size_t *out_len) {
-	if (!start || !end || !out_buf || !out_len) return;
-	size_t len = end - start;
-	size_t j = 0;
+/* Usage */
+/* gcc -o ./builds/test tokenizer.c normalizer.c */
+int main(void) {
+    const char *t = "don't John's 'quoted' self-destruct"; 
+    TokenList *list = NULL;
+    tokenize(t, &list);
 
-    	// must be at least 3 chars e.g. 'X.Y' to be abbreviation
-    	if (len < 3) {
-        // copy as is
-        for (size_t i = 0; i < len; i++) out_buf[i] = start[i];
-        	*out_len = len;
-        	return;
-    	}
+    char *buf[256];
+    normalize_(list, buf);
 
-    	// pattern check: Letter-Period-Letter-Period...
-    	int is_abbrev = 1;
-    	for (size_t i = 0; i < len; i++) {
-        	if (i % 2 == 0) {          // even indices: letters
-            	if (!isalpha((unsigned char)start[i])) { is_abbrev = 0; break; }
-        	} else {                   // odd indices: period
-            		if (start[i] != '.') { is_abbrev = 0; break; }
-        	}
-    	}
+    for (size_t i = 0; buf[i] != NULL; i++) {
+        printf("%s ", buf[i]);
+    }
 
-    	if (!is_abbrev) {
-        	// not abbreviation: copy as-is
-        	for (size_t i = 0; i < len; i++) out_buf[i] = start[i];
-        	*out_len = len;
-        	return;
-    	}
-
-    	// strip periods
-    	for (size_t i = 0; i < len; i++) {
-        	if (start[i] != '.') {
-            	out_buf[j++] = start[i];
-        	}
-    	}
-
-    	*out_len = j;
+    free_normalized(buf);
+    free_tokens(list);
 }
